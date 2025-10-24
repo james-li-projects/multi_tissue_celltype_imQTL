@@ -1,0 +1,405 @@
+################################################################################
+# MASTER FILE FOR MAPPING AND ANALYSIS OF CELL TYPE INTERACTION MQTLS (imQTLs) #
+################################################################################
+
+# Identifying individuals to include from GTEx
+```{bash}
+# copying files over from Meri's directory to identify sample lists for mapping mQTLs
+for tissue in BreastMammaryTissue ColonTransverse KidneyCortex Lung MuscleSkeletal Ovary Prostate Testis WholeBlood
+do
+  echo $tissue
+  cp /gpfs/data/gtex-group/mpavia/methylation/data/Phenotypes/bedfiles/${tissue}.bed.gz /gpfs/data/pierce-lab/james.li/imQTL/data/GTEx/eligible_gtex_samples/${tissue}.bed.gz
+  cp /gpfs/data/gtex-group/mpavia/methylation/data/Covariates/${tissue}.covariates.txt /gpfs/data/pierce-lab/james.li/imQTL/data/GTEx/eligible_gtex_samples/${tissue}.covariates.txt
+done
+
+# outputting eligible sample lists for GTEx samples
+for tissue in BreastMammaryTissue ColonTransverse KidneyCortex Lung MuscleSkeletal Ovary Prostate Testis WholeBlood
+do
+  echo ${tissue}
+  Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/IDENTIFY_ELIGIBLE_GTEX_SAMPLES.R ${tissue}
+done
+```
+
+# Preprocessing all the genetic data
+```{bash}
+bash /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/PROCESSING_GENETIC_DATA.sh
+```
+
+# Generating PCs for GTEX and HEALS genetic data
+```{bash}
+for o in GTEx HEALS
+do
+  sbatch --export=ARGS1=${o} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/PLINK2_PCA.sh
+done
+```
+
+# Identifying samples to include in mQTL analysis by filtering for individuals with methylation, genotyping, and covariate data
+```{r}
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/GTEx_INCLUDE_INDIVIDUALS.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/HEALS_INCLUDE_INDIVIDUALS.R
+```
+
+# Estimating cell type fractions in each tissue
+```{r}
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/GTEx_ESTIMATE_CELLTYPE.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/HEALS_ESTIMATE_CELLTYPE.R
+```
+
+# Converting DNAm data to M-values and then applying a rank-based inverse normal transform (INT)
+```{r}
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/GTEx_PROCESSING_DNAM.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/HEALS_PROCESSING_DNAM.R
+```
+
+# Assembling covariate files
+```{r}
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/GTEx_ASSEMBLING_COVARIATE_FILES.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/HEALS_ASSEMBLING_COVARIATE_FILES.R
+```
+
+# Utilizing tensorQTL to map imQTLs
+```{bash}
+#SBATCH -p gpuq
+#SBATCH --gres gpu:1
+# srun --pty -p gpuq --gres gpu:1 /bin/bash
+
+##########################
+# MAPPING imQTLS [BEST ONLY]
+for dataset in HEALS GTEx
+do
+  # set working directory
+  cd /gpfs/data/pierce-lab/james.li/imQTL/input/${dataset}
+  # loop to submit jobs for each tissue and cell type
+  for tissue in `ls *.bed | cut -d"." -f1`
+  do
+    # obtaining list of cell types for current tissue
+    tmp_cell_type_list=`ls processed_interactions_${tissue}_*.txt | cut -d"_" -f4 | cut -d"." -f1`
+    # submitting tensorQTL jobs for each tissue and cell type
+    for cell_type in $tmp_cell_type_list
+    do
+      echo $dataset $tissue $cell_type
+      sbatch --export=ARGS1=${dataset},ARGS2=${tissue},ARGS3=${cell_type} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/tensorQTL_imQTL_BEST_ONLY.sh
+    done
+  done
+done
+
+##########################
+# MAPPING imQTLS [ALL]
+for dataset in HEALS GTEx
+do
+  # set working directory
+  cd /gpfs/data/pierce-lab/james.li/imQTL/input/${dataset}
+  # loop to submit jobs for each tissue and cell type
+  for tissue in `ls *.bed | cut -d"." -f1`
+  do
+    # obtaining list of cell types for current tissue
+    tmp_cell_type_list=`ls processed_interactions_${tissue}_*.txt | cut -d"_" -f4 | cut -d"." -f1`
+    # submitting tensorQTL jobs for each tissue and cell type
+    for cell_type in $tmp_cell_type_list
+    do
+      echo $dataset $tissue $cell_type
+      sbatch --export=ARGS1=${dataset},ARGS2=${tissue},ARGS3=${cell_type} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/tensorQTL_imQTL_ALL.sh
+    done
+  done
+done
+
+##########################
+# MAPPING mQTLs [BEST ONLY]
+for dataset in HEALS GTEx
+do
+  # set working directory
+  cd /gpfs/data/pierce-lab/james.li/imQTL/input/${dataset}
+  # loop to submit jobs for each tissue type
+  for tissue in `ls *.bed | cut -d"." -f1`
+  do
+    # submitting tensorQTL jobs for each tissue type
+    echo $dataset $tissue
+    sbatch --export=ARGS1=${dataset},ARGS2=${tissue} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/tensorQTL_mQTL_BEST_ONLY.sh
+  done
+done
+
+##########################
+# MAPPING mQTLs [ALL]
+for dataset in HEALS GTEx
+do
+  # set working directory
+  cd /gpfs/data/pierce-lab/james.li/imQTL/input/${dataset}
+  # loop to submit jobs for each tissue type
+  for tissue in `ls *.bed | cut -d"." -f1`
+  do
+    # submitting tensorQTL jobs for each tissue type
+    echo $dataset $tissue
+    sbatch --export=ARGS1=${dataset},ARGS2=${tissue} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/tensorQTL_mQTL_ALL.sh
+  done
+done
+```
+
+# Generating a combined plot of inferred cell type proportions across tissue types
+```{r}
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/PLOT_CELLTYPE_FRACTIONS.R
+```
+
+# Generating Q-Q plots for imQTLs
+```{bash}
+for dataset in GTEx HEALS
+do
+  cd /gpfs/data/pierce-lab/james.li/imQTL/output/${dataset}/imQTL/top_assoc
+  tissue_cell_combination_list=`ls tensorQTL_imQTL_*.cis_qtl_top_assoc.txt.gz | cut -d"." -f1 | uniq`
+  for combination in ${tissue_cell_combination_list}
+  do
+    echo ${dataset} ${combination}
+    sbatch --export=ARGS1=${dataset},ARGS2=${combination} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/PLOT_QQPLOT.sh
+  done
+done
+```
+
+# Extracting counts of mQTLs and imQTLs
+```{bash}
+# identifying number of mapped imQTLs
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/PLOT_NUM_imQTL.R
+# identifying number of mapped mQTLs
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/PLOT_NUM_mQTL.R
+# identifying CpGs mapped to imQTLs but not mQTLs
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/IDENTIFY_CPG_IMQTLS_NOT_MQTLS.R
+```
+
+# Evaluating distances between CpGs and variants between imQTLs and mQTLs
+```{bash}
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/DISTANCE_CPG_VARIANT.R
+```
+
+# Examining directional consistency of marginal and interaction term effects for these imQTLs and generating regional plots
+```{bash}
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/PROCESS_QTL_EFFECTS_REGIONAL_PLOT.R
+
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/PLOT_INTERACTION_MQTL_BOXPLOT.R
+```
+
+# Performing validation of whole blood results
+```{bash}
+# obtaining interaction term estimates for the whole blood imQTLs in HEALS and GTEx
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/VALIDATION_WB_IMQTL_PROCESS_EFFECTS.R
+
+# parsing through these validation results and generating plots
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/VALIDATION_WB_IMQTL_PARSE_EFFECTS.R
+```
+
+# Assessing whether whole blood imQTLs mapped in HEALS tend to reside in differentially methylated regions in GTEx whole blood samples
+```{bash}
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/WB_DIFFERENTIALLY_METHYLATED_REGIONS.R
+```
+
+# Comparing interaction terms of imQTLs with consistent interaction and marginal effects across tissues
+```{bash}
+# identify IDs for all significant cpg/variant pairs
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/EXTRACT_CPG_VARIANT_PAIRID_SIG_imQTL.R
+
+# obtaining interaction effect sizes and standard errors for significant cpg/variant pairs
+for dataset in GTEx HEALS
+do
+  cd /gpfs/data/pierce-lab/james.li/imQTL/output/${dataset}/imQTL/top_assoc
+  tissue_cell_combination_list=`ls tensorQTL_imQTL_*.cis_qtl_top_assoc.txt.gz | cut -d"." -f1 | uniq | grep -v "Eosino"`
+  for combination in ${tissue_cell_combination_list}
+  do
+    echo ${dataset} ${combination}
+    sbatch --export=ARGS1=${dataset},ARGS2=${combination} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/PARQUET_EXTRACT_VARIANTS.sh
+  done
+done
+
+# comparing interaction terms of imQTLs across tissues and cell types
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/RUN_CROSS_TISSUE_COMPARE.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/RUN_CROSS_TISSUE_COMPARE_wb.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/RUN_CROSS_TISSUE_COMPARE_colon.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/RUN_CROSS_TISSUE_COMPARE_lung.R
+# Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/RUN_CROSS_TISSUE_COMPARE_NO_WHOLE_BLOOD.R
+
+# examining whether interaction terms flip for major cell types
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/MAJOR_CELLTYPE_wb_Neutro.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/MAJOR_CELLTYPE_colon_Lym.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/MAJOR_CELLTYPE_lung_Endo.R
+```
+
+# Examine pleiotropy of lead variants
+```{bash}
+# extracting pleiotropic variants and metrics from parquet files
+python /gpfs/data/pierce-lab/james.li/imQTL/code/python/PLEIOTROPY_ANALYSIS.py
+
+# creating plots to characterize pleiotropy
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/PLOT_PLEIOTROPY_ANALYSIS.R
+```
+
+# Identifying number of conditionally independent signals at each imQTL locus
+```{bash}
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/COUNTING_CONDITIONALLY_INDEPENDENT_IMQTLS.R
+```
+
+# Identifying candidate cell type-specific mQTLs
+```{bash}
+# filtering by interaction term 
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/CANDIDATE_CT_SPECIFIC_IMQTL.R
+# filtering by top 50% of cell types
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/CANDIDATE_CT_SPECIFIC_IMQTL_2.R
+# plotting these cell type specific imQTLs
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/CANDIDATE_CT_SPECIFIC_IMQTL_REGRESSION_BOXPLOTS.R
+# plotting an imQTL with opposite directionality between two imQTLs
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/CANDIDATE_CT_SPECIFIC_IMQTL_EXAMPLE_INDEL.R
+```
+
+# Mapping eQTLs that have been previously discovered in GTEx
+```{bash}
+# set working directory
+cd /gpfs/data/pierce-lab/james.li/imQTL/data/ADDITIONAL/GTEx_eQTL_v8/input
+
+# Loop through all files in the current directory
+for file in *; do
+  # Perform substitutions
+  new_file=$(echo "$file" \
+    | sed 's/Colon_Transverse/colon/' \
+    | sed 's/Whole_Blood/wb/' \
+    | sed 's/Lung/lung/' \
+    | sed 's/Ovary/ovary/' \
+    | sed 's/Prostate/prostate/')
+
+  # Rename the file if the name has changed
+  if [[ "$file" != "$new_file" ]]; then
+    mv "$file" "$new_file"
+    echo "Renamed: $file -> $new_file"
+  fi
+done
+
+# running tensorQTL
+for tissue in colon lung ovary prostate wb
+do
+  sbatch --export=ARGS1=${tissue} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/tensorQTL_eQTL_ALL.sh
+done
+```
+
+# Performing coloc of imQTLs with GWAS summary statistics
+```{bash}
+# processing cancer GWAS summary statistics
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/PROCESS_CANCER_GWAS.R
+
+# preparing lists for extraction of variants nearby imqtls that are tested for their association with a given cpg 
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/GWAS_COLOC_PREPARE_EXTRACT_IMQTL.R
+
+# extracting variants within +/- 250 kb of a given lead variant for a particular cpg mapped to an imqtl
+for extract_list in /gpfs/data/pierce-lab/james.li/imQTL/output/GWAS_coloc/extract_imqtl_list/*
+do
+  sbatch --export=ARGS1=${extract_list} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/GWAS_COLOC_EXTRACT_IMQTL_DATA.sh
+done
+
+# performing coloc on each gwas summary statistics file
+for gwas_file in /gpfs/data/pierce-lab/james.li/GWAS_Trait_87/*.txt.gz
+do
+  sbatch --export=ARGS1=${gwas_file} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/GWAS_COLOC_RUN.sh
+done
+
+# plotting results and identifying imQTLs with multiple coloc hits [utilize this rscript after all of the eQTL/marginal effect QTL analysis below]
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/GWAS_COLOC_PLOT.R
+```
+
+# Performing coloc of mQTL signals at mQTLs with GWAS
+```{bash}
+# convert mQTL parquet files to tsv
+python /gpfs/data/pierce-lab/james.li/imQTL/code/python/CONVERT_GTEX_MQTL_PARQUET_TSV.py
+
+# extract mQTL associations around each imQTL within +/- 250 kb for a given CpG
+for extract_list in /gpfs/data/pierce-lab/james.li/imQTL/output/GWAS_coloc/extract_imqtl_list/*
+do
+  sbatch --export=ARGS1=${extract_list} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/GWAS_COLOC_EXTRACT_MQTL_DATA.sh
+done
+
+# performing GWAS-mQTL coloc by iterating through each GWAS summary statistics file
+for gwas_file in /gpfs/data/pierce-lab/james.li/GWAS_Trait_87/*.txt.gz
+do
+  sbatch --export=ARGS1=${gwas_file} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/GWAS_MQTL_COLOC_RUN.sh
+done
+
+# analyzing mQTL and imQTL coloc with GWAS
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/GWAS_COLOC_PARSE_MQTL.R
+```
+
+# Performing coloc of imQTLs with eQTLs
+```{bash}
+# convert GTEx eQTLs from parquet to tsv format
+python /gpfs/data/pierce-lab/james.li/imQTL/code/python/CONVERT_GTEX_EQTL_PARQUET_TSV.py
+
+# performing coloc of imQTLs with eQTLs (using extracted imQTL lists from the GWAS coloc)
+for extract_list in /gpfs/data/pierce-lab/james.li/imQTL/output/GWAS_coloc/extract_imqtl_list/*
+do
+  sbatch --export=ARGS1=${extract_list} /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/EQTL_COLOC_RUN.sh
+done
+
+# examining eqtl coloc results and plotting
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/EQTL_COLOC_EXAMINE.R
+```
+
+# Performing enrichment analyses for genomic context
+```{bash}
+# assembling all chromatin segmentation states files in hg38
+bash /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/ASSEMBLING_CHROMATIN_SEGMENTATION_STATE_BED_hg38.sh
+
+# moving all target hg38 bed/interval genomic annotation files to the same directory
+input_dir_UCSC=/gpfs/data/pierce-lab/james.li/imQTL/data/ADDITIONAL/UCSC_TABLE_BROWSER_hg38
+input_dir_ENCODE5=/gpfs/data/pierce-lab/james.li/imQTL/data/ADDITIONAL/ENCODE5_hg38
+input_dir_CHROMATIN=/gpfs/data/pierce-lab/james.li/imQTL/data/ADDITIONAL/CHROMATIN_SEGMENTATION/hg38/mapped
+output_dir=/gpfs/data/pierce-lab/james.li/imQTL/data/ADDITIONAL/TARGET_GENOMIC_ANNOTATION_BED_hg38
+for tmp_dir in ${input_dir_UCSC} ${input_dir_ENCODE5} ${input_dir_CHROMATIN}
+do
+  cd ${tmp_dir}
+  cp * ${output_dir}/
+done
+cd /gpfs/data/pierce-lab/james.li/imQTL/data/ADDITIONAL/TARGET_GENOMIC_ANNOTATION_BED_hg38
+cat cpgShelf1.bed cpgShelf2.bed cpgIsland.bed > cpgShelf.bed
+cat cpgShore1.bed cpgShore2.bed cpgIsland.bed > cpgShore.bed
+rm cpgShelf1.bed cpgShelf2.bed cpgShore1.bed cpgShore2.bed
+
+# obtaining background/tested variant and cpg bed files for enrichment analysis (later, imQTL and mQTL variants and cpgs will be extracted from these total background/tested lists)
+bash /gpfs/data/pierce-lab/james.li/imQTL/code/sbatch/ENRICHMENT_ANALYSIS_ASSEMBLE_BACKGROUND_INPUTS.sh
+
+# obtaining enrichment annotations for each file
+bed_file_dir=/gpfs/data/pierce-lab/james.li/imQTL/data/ADDITIONAL/ENRICHMENT_ANALYSIS/BACKGROUND/bed
+interval_file_dir=/gpfs/data/pierce-lab/james.li/imQTL/data/ADDITIONAL/TARGET_GENOMIC_ANNOTATION_BED_hg38
+output_bed_dir=/gpfs/data/pierce-lab/james.li/imQTL/output/ENRICHMENT_ANALYSIS/bedtools_output
+# loading modules
+module load gcc
+module load bedtools
+# running the for-loop, takes around 10-15 minutes
+for bed_file in `ls ${bed_file_dir}* | head`
+do
+  for interval_file in `ls ${interval_file_dir}*`
+  do
+    echo ${bed_file} ${interval_file}
+    bedtools intersect -a ${bed_file_dir}/${bed_file} -b ${interval_file_dir}/${interval_file} -wa -wb > "${output_bed_dir}/${bed_file}-${interval_file}"
+  done
+done
+
+# processing and plotting enrichment results
+## general parsing
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/ENRICHMENT_ANALYSIS_PARSING.R
+## plotting genomic context
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/ENRICHMENT_ANALYSIS_PLOT_GENOMIC_CONTEXT.R
+## plotting chromatin states
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/ENRICHMENT_ANALYSIS_PLOT_CHROMATIN.R
+## plotting TFBS
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/ENRICHMENT_ANALYSIS_TFBS.R
+```
+
+# Making additional figures and tables for paper
+```{bash}
+# creating miscellaneous plots for figures in the manuscript 
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/FIGURE2_PANEL_GENERATION.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/TARGET_REGIONAL_EQTL_CUSTOM_1.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/TARGET_REGIONAL_EQTL_CUSTOM_2.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/TARGET_REGIONAL_MQTL_CUSTOM_1.R
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/TARGET_REGIONAL_MQTL_CUSTOM_2.R
+
+# assembling a GWAS meta-data table for the supplementary material
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/ASSEMBLING_GWAS_METADATA_TABLE.R
+
+# parsing summary statistics for all imQTLs and also CT-specific imQTLs
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/PARSING_SUMSTATS_IMQTL_AND_CTSPECIFIC.R
+
+# obtaining summarys of each covariate and also DNAm PC associations with covariates
+Rscript /gpfs/data/pierce-lab/james.li/imQTL/code/rscripts/PLOTTING_COVARIATE_CORRPLOTS.R
+```
